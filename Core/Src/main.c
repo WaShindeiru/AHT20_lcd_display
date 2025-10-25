@@ -32,6 +32,8 @@
 #include "lcd_i2c.h"
 #include <stdbool.h>
 
+#include "aht20_i2c.h"
+
 #include "string.h"
 #include "math.h"
 
@@ -46,8 +48,6 @@
 /* USER CODE BEGIN PD */
 
 #define LCD_ADDRESS (0x3F << 1)
-#define AHT_ADDRESS 0x38<<1
-#define AHT_STATUS_CODE 0x71
 
 /* USER CODE END PD */
 
@@ -61,12 +61,7 @@
 /* USER CODE BEGIN PV */
 
 struct lcd_disp disp;
-
-float humidity;
-float temperature;
-
-uint8_t buffer[40];
-uint8_t aht_buffer[7] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+aht20 aht;
 
 SemaphoreHandle_t i2c_mutex;
 
@@ -83,51 +78,6 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-HAL_StatusTypeDef AHT20_Get_Status(uint8_t* statusWord) {
-	return HAL_I2C_Mem_Read(&hi2c1, AHT_ADDRESS, AHT_STATUS_CODE, 1, statusWord, 1, 1000);
-}
-
-HAL_StatusTypeDef AHT20_Initialize() {
-	uint8_t commands[3] = {0xbe, 0x08, 0x00};
-	HAL_StatusTypeDef returnValue;
-
-	returnValue = HAL_I2C_Master_Transmit(&hi2c1, AHT_ADDRESS, commands, 3, 1000);
-	vTaskDelay(pdMS_TO_TICKS(10));
-
-	return returnValue;
-}
-
-HAL_StatusTypeDef AHT20_Make_Measurement() {
-	uint8_t commands[3] = {0xAC, 0x33, 0x00};
-	HAL_StatusTypeDef returnValue;
-
-	returnValue = HAL_I2C_Master_Transmit(&hi2c1, AHT_ADDRESS, commands, 3, 1000);
-	if (returnValue != HAL_OK) {
-		return returnValue;
-	}
-
-	vTaskDelay(pdMS_TO_TICKS(80));
-
-	uint8_t statusWord = 0x80;
-
-	while ((statusWord>>7 & 0x01) == 1) {
-		AHT20_Get_Status(&statusWord);
-		vTaskDelay(pdMS_TO_TICKS(100));
-	}
-
-	HAL_I2C_Master_Receive(&hi2c1, AHT_ADDRESS, aht_buffer, 7, 1000);
-
-	uint32_t hum_data = (aht_buffer[1]<<16)|(aht_buffer[2]<<8)|aht_buffer[3];
-	hum_data = hum_data>>4;
-	humidity = (float) ((hum_data / pow(2, 20)) * 100);
-
-	uint32_t temp_data = (aht_buffer[3]<<16)|(aht_buffer[4]<<8)|aht_buffer[5];
-	temp_data = temp_data & 0xFFFFF;
-	temperature = (float) (((temp_data / pow(2, 20)) * 200) - 50);
-
-	return returnValue;
-}
-
 void LCDTask(void* pvParameters) {
 	disp.addr = LCD_ADDRESS;
 	disp.bl = true;
@@ -135,8 +85,8 @@ void LCDTask(void* pvParameters) {
 	BaseType_t status;
 
 	for (;;) {
-		sprintf((char *)disp.f_line, "Temp: %.2f", temperature);
-		sprintf((char *)disp.s_line, "Humd: %.2f", humidity);
+		sprintf((char *)disp.f_line, "Temp: %.2f", aht.temperature);
+		sprintf((char *)disp.s_line, "Humd: %.2f", aht.humidity);
 
 		status = xSemaphoreTake( i2c_mutex, pdMS_TO_TICKS(2000) );
 		if (status == pdTRUE)
@@ -159,7 +109,7 @@ void AHT20Task(void* pvParameters) {
 		status = xSemaphoreTake( i2c_mutex, pdMS_TO_TICKS(2000) );
 		if (status == pdTRUE)
 		{
-			AHT20_Make_Measurement();
+			AHT20_Make_Measurement(&aht);
 			xSemaphoreGive( i2c_mutex );
 			vTaskDelay(pdMS_TO_TICKS(1000));
 		} else {

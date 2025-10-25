@@ -1,6 +1,7 @@
 #include "lcd_i2c.h"
 #include "stm32l4xx_hal.h"
 #include "i2c.h"
+#include "FreeRTOS.h"
 
 void lcd_init(struct lcd_disp * lcd)
 {
@@ -12,11 +13,11 @@ void lcd_init(struct lcd_disp * lcd)
 	}
 
 	/* init sequence */
-	HAL_Delay(40);
+	vTaskDelay(pdMS_TO_TICKS(40));
 	lcd_write(lcd->addr, INIT_8_BIT_MODE, xpin);
-	HAL_Delay(5);
+	vTaskDelay(pdMS_TO_TICKS(5));
 	lcd_write(lcd->addr, INIT_8_BIT_MODE, xpin);
-	HAL_Delay(1);
+	vTaskDelay(pdMS_TO_TICKS(1));
 	lcd_write(lcd->addr, INIT_8_BIT_MODE, xpin);
 
 	/* set 4-bit mode */
@@ -43,7 +44,7 @@ void lcd_write(uint8_t addr, uint8_t data, uint8_t xpin)
 	/* send data via i2c */
 	HAL_I2C_Master_Transmit(&HI2C_DEF, addr, tx_data, 4, 100);
 
-	HAL_Delay(5);
+	vTaskDelay(pdMS_TO_TICKS(5));
 }
 
 void lcd_display(struct lcd_disp * lcd)
