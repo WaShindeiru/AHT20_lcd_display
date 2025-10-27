@@ -27,12 +27,14 @@
 #include <stdio.h>
 #include "FreeRTOS.h"
 #include "task.h"
-#include "semphr.h"
+#include "queue.h"
 
 #include "lcd_i2c.h"
 #include <stdbool.h>
 
 #include "aht20_i2c.h"
+
+#include "i2c_queue.h"
 
 #include "string.h"
 #include "math.h"
@@ -60,10 +62,10 @@
 
 /* USER CODE BEGIN PV */
 
+QueueHandle_t i2c_queue;
+
 struct lcd_disp disp;
 aht20 aht;
-
-SemaphoreHandle_t i2c_mutex;
 
 /* USER CODE END PV */
 
@@ -82,20 +84,22 @@ void LCDTask(void* pvParameters) {
 	disp.addr = LCD_ADDRESS;
 	disp.bl = true;
 	lcd_init(&disp);
+
 	BaseType_t status;
+	I2C_Task lcdTask = {
+		LCDWrite,
+		(void*) &disp,
+	};
 
 	for (;;) {
 		sprintf((char *)disp.f_line, "Temp: %.2f", aht.temperature);
 		sprintf((char *)disp.s_line, "Humd: %.2f", aht.humidity);
 
-		status = xSemaphoreTake( i2c_mutex, pdMS_TO_TICKS(2000) );
-		if (status == pdTRUE)
-		{
-			lcd_display(&disp);
-			xSemaphoreGive( i2c_mutex );
+		if (xQueueSend(i2c_queue, &lcdTask, pdMS_TO_TICKS(60000)) == pdPASS) {
+//			printf("lcd task, send \n");
 			vTaskDelay(pdMS_TO_TICKS(2000));
 		} else {
-			vTaskDelay(pdMS_TO_TICKS(40));
+			vTaskDelay(pdMS_TO_TICKS(100));
 		}
 	}
 }
@@ -103,17 +107,34 @@ void LCDTask(void* pvParameters) {
 void AHT20Task(void* pvParameters) {
 	vTaskDelay(pdMS_TO_TICKS(40));
 	AHT20_Initialize();
+
 	BaseType_t status;
+	I2C_Task ahtTask = {
+		AHT20Read,
+		(void*) &aht
+	};
 
 	for (;;) {
-		status = xSemaphoreTake( i2c_mutex, pdMS_TO_TICKS(2000) );
-		if (status == pdTRUE)
-		{
-			AHT20_Make_Measurement(&aht);
-			xSemaphoreGive( i2c_mutex );
+		if (xQueueSend(i2c_queue, &ahtTask, pdMS_TO_TICKS(60000)) == pdPASS) {
+//			printf("aht20 task, send \n");
 			vTaskDelay(pdMS_TO_TICKS(1000));
 		} else {
-			vTaskDelay(pdMS_TO_TICKS(40));
+			vTaskDelay(pdMS_TO_TICKS(100));
+		}
+	}
+}
+
+void I2CGatekeeperTask(void* pvParameters) {
+	I2C_Task task;
+
+	for (;;) {
+		printf("Queue has %d messages\n", uxQueueMessagesWaiting( i2c_queue ));
+
+		if (xQueueReceive(i2c_queue, &task, pdMS_TO_TICKS(60000)) == pdPASS) {
+//			printf("gatekeeper task receive\n");
+			vHandleI2CTask(&task);
+		} else {
+			vTaskDelay(pdMS_TO_TICKS(100));
 		}
 	}
 }
@@ -151,17 +172,21 @@ int main(void)
   MX_I2C1_Init();
   /* USER CODE BEGIN 2 */
 
-  i2c_mutex = xSemaphoreCreateMutex();
-  configASSERT(i2c_mutex != NULL);
+  i2c_queue = xQueueCreate(I2C_QUEUE_LENGTH, sizeof(I2C_Task));
+  configASSERT(i2c_queue != NULL);
 
   BaseType_t status;
 
-  status = xTaskCreate(LCDTask, "LCDTask", 200, NULL, 4, NULL);
+  status = xTaskCreate(LCDTask, "LCDTask", 200, NULL, 2, NULL);
   configASSERT(status == pdPASS);
 
-  status = xTaskCreate(AHT20Task, "AHT20Task", 200, NULL, 4, NULL);
+  status = xTaskCreate(AHT20Task, "AHT20Task", 200, NULL, 2, NULL);
   configASSERT(status == pdPASS);
 
+  status = xTaskCreate(I2CGatekeeperTask, "I2CGatekeeperTask", 100, NULL, 4, NULL);
+  configASSERT(status == pdPASS);
+
+  printf("test \n");
 
   vTaskStartScheduler();
 
